@@ -39,6 +39,8 @@ jobs:
 
       - name: Android SDK hazırla
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       - name: Gradle önbelleğini hazırla
         uses: gradle/actions/setup-gradle@v4
