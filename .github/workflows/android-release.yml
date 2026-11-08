@@ -61,6 +61,26 @@ jobs:
 
       - name: Expo Android projesini oluştur
         run: npx expo prebuild --platform android --clean --no-install
+      - name: BuildConfig ve paket adlarını kontrol et
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== Gradle namespace ve BuildConfig ayarları ==="
+          grep -nE 'namespace|applicationId|buildFeatures|buildConfig' android/app/build.gradle || true
+
+          echo "=== Kotlin package ve import satırları ==="
+          find android/app/src/main -type f \( -name 'MainActivity.kt' -o -name 'MainApplication.kt' \) \
+            -exec grep -nHE '^package |^import .*BuildConfig' {} \;
+
+          echo "=== BuildConfig oluştur ==="
+          cd android
+          chmod +x gradlew
+          ./gradlew :app:generateReleaseBuildConfig --no-daemon --console=plain
+
+          echo "=== Oluşturulan BuildConfig dosyaları ==="
+          find app/build/generated -type f -name 'BuildConfig.*' \
+            -print -exec head -n 20 {} \;
 
       - name: Bağımsız APK derle
         shell: bash
