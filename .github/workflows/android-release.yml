@@ -52,9 +52,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f package-lock.json ]; then
-            npm ci --include=dev
+            npm ci --include=dev --legacy-peer-deps
           else
-            npm install --include=dev
+             npm install --include=dev --legacy-peer-deps
           fi
           node -e "require.resolve('expo/package.json'); require.resolve('expo-router/package.json')"
 
