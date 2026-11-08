@@ -56,7 +56,7 @@ jobs:
           else
             npm install --no-save --include=dev --legacy-peer-deps ajv@8 xlsx
           fi
-            npm install --no-save --legacy-peer-deps ajv@8with:packages:
+            npm install --no-save --include=dev --legacy-peer-deps ajv@8 xlsx
           node -e "require.resolve('expo/package.json'); require.resolve('expo-router/package.json')"
 
       - name: Expo Android projesini oluştur
