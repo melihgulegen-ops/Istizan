@@ -1,0 +1,127 @@
+name: Android APK Release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: İstizan çevrimdışı APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI: "1"
+      NODE_ENV: production
+      EXPO_NO_TELEMETRY: "1"
+    steps:
+      - name: Kaynak kodunu al
+        uses: actions/checkout@v4
+
+      - name: Node.js hazırla
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Java hazırla
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK hazırla
+        uses: android-actions/setup-android@v3
+
+      - name: Gradle önbelleğini hazırla
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Bağımlılıkları kur
+        env:
+          NODE_ENV: development
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci --include=dev
+          else
+            npm install --include=dev
+          fi
+          node -e "require.resolve('expo/package.json'); require.resolve('expo-router/package.json')"
+
+      - name: Expo Android projesini oluştur
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Bağımsız APK derle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace \
+            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a \
+            2>&1 | tee ../dist/android-build.log
+
+      - name: APK ve çevrimdışı paketi kontrol et
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp android/app/build/outputs/apk/release/app-release.apk dist/istizan-offline.apk
+          test -s dist/istizan-offline.apk
+          unzip -l dist/istizan-offline.apk > dist/apk-files.txt
+          grep -E 'assets/index.android.bundle' dist/apk-files.txt
+          cd dist
+          sha256sum istizan-offline.apk > istizan-offline.apk.sha256
+          printf '%s\n' \
+            'İstizan — çevrimdışı Android APK' \
+            'ZIP dosyasını çıkarıp istizan-offline.apk dosyasını telefona kurun.' \
+            'İnternet ve Expo Go gerekmez; JavaScript paketi APK içine gömülüdür.' \
+            'Bu kişisel kullanım APK dosyası Expo şablonunun geliştirme anahtarıyla imzalanır.' \
+            'Google Play yayını için özel, güvenli bir imzalama anahtarı gerekir.' \
+            'Uygulamayı kaldırmak yerel kayıtları silebilir.' > KURULUM.txt
+
+      - name: APK indirme dosyasını yükle
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: istizan-offline-apk
+          path: |
+            dist/istizan-offline.apk
+            dist/istizan-offline.apk.sha256
+            dist/KURULUM.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Etiketli sürüme APK ekle
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: İstizan ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/istizan-offline.apk
+            dist/istizan-offline.apk.sha256
+
+      - name: İndirme bağlantısını göster
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        shell: bash
+        run: |
+          printf '## İstizan APK hazır\n\n[APK ZIP dosyasını indir](%s)\n\nZIP içindeki `istizan-offline.apk` dosyasını Android telefona kurun. Expo Go gerekmez.\n\nKişisel kullanım için geliştirme anahtarıyla imzalanmıştır; Google Play yayını için özel imzalama gerekir.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Derleme hata kaydını yükle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-error-${{ github.run_number }}
+          path: dist/android-build.log
+          if-no-files-found: ignore
+          retention-days: 14
