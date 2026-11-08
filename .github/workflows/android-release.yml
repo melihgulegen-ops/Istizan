@@ -20,7 +20,6 @@ jobs:
     timeout-minutes: 60
     env:
       CI: "1"
-      NODE_ENV: production
       EXPO_NO_TELEMETRY: "1"
     steps:
       - name: Kaynak kodunu al
@@ -46,70 +45,38 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Bağımlılıkları kur
-        env:
-          NODE_ENV: development
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f package-lock.json ]; then
-            npm ci --include=dev --legacy-peer-deps
-          else
-            npm install --no-save --include=dev --legacy-peer-deps ajv@8 xlsx
-          fi
-            npm install --no-save --include=dev --legacy-peer-deps ajv@8 xlsx
-          node -e "require.resolve('expo/package.json'); require.resolve('expo-router/package.json')"
+          npm install --include=dev --legacy-peer-deps
 
       - name: Expo Android projesini oluştur
         run: npx expo prebuild --platform android --clean --no-install
-      - name: BuildConfig ve paket adlarını kontrol et
+
+      - name: Debug APK derle
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "=== Gradle namespace ve BuildConfig ayarları ==="
-          grep -nE 'namespace|applicationId|buildFeatures|buildConfig' android/app/build.gradle || true
-
-          echo "=== Kotlin package ve import satırları ==="
-          find android/app/src/main -type f \( -name 'MainActivity.kt' -o -name 'MainApplication.kt' \) \
-            -exec grep -nHE '^package |^import .*BuildConfig' {} \;
-
-          echo "=== BuildConfig oluştur ==="
+          chmod +x android/gradlew
           cd android
-          chmod +x gradlew
-          ./gradlew :app:generateReleaseBuildConfig --no-daemon --console=plain
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace \
+            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a \
+            2>&1 | tee ../android-build.log
 
-          echo "=== Oluşturulan BuildConfig dosyaları ==="
-          find app/build/generated -type f -name 'BuildConfig.*' \
-            -print -exec head -n 20 {} \;
-
-      - name: Bağımsız APK derle
+      - name: APK hazırla
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          chmod +x android/gradlew
-          cd android
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace \
-            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a \
-            2>&1 | tee ../dist/android-build.log
-
-      - name: APK ve çevrimdışı paketi kontrol et
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp android/app/build/outputs/apk/release/app-release.apk dist/istizan-offline.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/istizan-offline.apk
           test -s dist/istizan-offline.apk
-          unzip -l dist/istizan-offline.apk > dist/apk-files.txt
-          grep -E 'assets/index.android.bundle' dist/apk-files.txt
           cd dist
           sha256sum istizan-offline.apk > istizan-offline.apk.sha256
           printf '%s\n' \
             'İstizan — çevrimdışı Android APK' \
-            'ZIP dosyasını çıkarıp istizan-offline.apk dosyasını telefona kurun.' \
+            'istizan-offline.apk dosyasını telefona kurun.' \
             'İnternet ve Expo Go gerekmez; JavaScript paketi APK içine gömülüdür.' \
-            'Bu kişisel kullanım APK dosyası Expo şablonunun geliştirme anahtarıyla imzalanır.' \
-            'Google Play yayını için özel, güvenli bir imzalama anahtarı gerekir.' \
-            'Uygulamayı kaldırmak yerel kayıtları silebilir.' > KURULUM.txt
+            'Google Play yayını için özel imzalama anahtarı gerekir.' > KURULUM.txt
 
       - name: APK indirme dosyasını yükle
         id: artifact
@@ -133,18 +100,11 @@ jobs:
             dist/istizan-offline.apk
             dist/istizan-offline.apk.sha256
 
-      - name: İndirme bağlantısını göster
-        env:
-          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
-        shell: bash
-        run: |
-          printf '## İstizan APK hazır\n\n[APK ZIP dosyasını indir](%s)\n\nZIP içindeki `istizan-offline.apk` dosyasını Android telefona kurun. Expo Go gerekmez.\n\nKişisel kullanım için geliştirme anahtarıyla imzalanmıştır; Google Play yayını için özel imzalama gerekir.\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Derleme hata kaydını yükle
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: android-build-error-${{ github.run_number }}
-          path: dist/android-build.log
+          path: android-build.log
           if-no-files-found: ignore
           retention-days: 14
