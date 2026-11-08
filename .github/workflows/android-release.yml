@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     name: İstizan çevrimdışı APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
       CI: "1"
@@ -28,7 +28,7 @@ jobs:
       - name: Node.js hazırla
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "20"
 
       - name: Java hazırla
         uses: actions/setup-java@v4
