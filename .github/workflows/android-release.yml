@@ -28,7 +28,7 @@ jobs:
       - name: Node.js hazırla
         uses: actions/setup-node@v4
         with:
-          node-version: "lts*"
+          node-version: "22"
 
       - name: Java hazırla
         uses: actions/setup-java@v4
