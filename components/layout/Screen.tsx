@@ -1,0 +1,20 @@
+import { type ReactNode } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { colors, font, radius, spacing } from '@/constants/theme';
+import { useRecords } from '@/hooks/useRecords';
+import { Button } from '@/components/ui/Controls';
+interface ScreenProps { children: ReactNode; title?: string; subtitle?: string; full?: boolean }
+export function Screen({ children, title, subtitle, full = false }: ScreenProps) {
+  const { ready, error, retry } = useRecords();
+  return <SafeAreaView edges={full ? ['bottom'] : ['top']} style={styles.safe}><KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.safe}><View style={styles.container}>{title ? <Header title={title} subtitle={subtitle} /> : null}{error ? <View style={styles.error}><Ionicons name="alert-circle-outline" color={colors.danger} size={20} /><Text style={styles.errorText}>{error}</Text>{!ready ? <Button label="Tekrar dene" onPress={retry} secondary /> : null}</View> : null}{ready ? children : !error ? <View style={styles.loading}><ActivityIndicator color={colors.primary} /><Text style={styles.subtle}>Kayıtlar yükleniyor…</Text></View> : null}</View></KeyboardAvoidingView></SafeAreaView>;
+}
+interface HeaderProps { title: string; subtitle?: string }
+export function Header({ title, subtitle }: HeaderProps) {
+  const router = useRouter();
+  return <View style={styles.header}><View style={styles.identity}><View style={styles.mark}><Ionicons name="moon-outline" size={26} color={colors.primary} /><Ionicons name="star-outline" size={12} color={colors.primary} style={styles.star} /></View><View><Text style={styles.brand}>{title}</Text><Text style={styles.subtle}>{subtitle || 'Görev · İstizan · Not'}</Text></View></View><Pressable onPress={() => router.push('/report')} accessibilityLabel="Rapor oluştur" accessibilityRole="button" style={({ pressed }) => [styles.report, { opacity: pressed ? 0.6 : 1 }]}><Ionicons name="document-text-outline" size={21} color={colors.primary} /></Pressable></View>;
+}
+export function Footer() { return <View style={styles.footer}><View style={styles.footerLine} /><Text style={styles.footerText}>MELİH GÜLEGEN · MGN</Text><View style={styles.footerLine} /></View>; }
+const styles = StyleSheet.create({ safe: { flex: 1, backgroundColor: colors.background }, container: { flex: 1, width: '100%', maxWidth: 960, alignSelf: 'center' }, header: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, identity: { flexDirection: 'row', gap: spacing.md, alignItems: 'center' }, mark: { width: 48, height: 48, backgroundColor: colors.goldSoft, borderColor: colors.goldBorder, borderWidth: 1, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' }, star: { position: 'absolute', top: 9, right: 6 }, brand: { color: colors.text, fontSize: font.title, fontWeight: '700', letterSpacing: 0.5 }, subtle: { color: colors.subtle, fontSize: font.small, marginTop: spacing.xs }, report: { height: 48, width: 48, borderRadius: radius.md, borderColor: colors.border, borderWidth: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface }, error: { padding: spacing.md, gap: spacing.sm, backgroundColor: colors.raised, margin: spacing.md, borderRadius: radius.sm }, errorText: { color: colors.danger, fontSize: font.body, lineHeight: 26 }, loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md }, footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.md, paddingVertical: spacing.xl }, footerLine: { height: 1, width: 24, backgroundColor: colors.goldBorder }, footerText: { color: colors.subtle, fontSize: font.tiny, letterSpacing: 2 } });
