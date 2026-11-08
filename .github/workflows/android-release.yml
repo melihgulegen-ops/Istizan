@@ -1,10 +1,13 @@
 name: Android APK Release
 
 on:
-  push:
-    branches: [main, master]
-    tags: ["v*"]
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -15,72 +18,186 @@ concurrency:
 
 jobs:
   build:
-    name: İstizan çevrimdışı APK
+    name: İstizan Android APK
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 90
+
+    defaults:
+      run:
+        shell: bash
+
     env:
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
+      NPM_CONFIG_LEGACY_PEER_DEPS: "true"
+
     steps:
       - name: Kaynak kodunu al
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Günlük klasörlerini oluştur
+        run: mkdir -p build-logs dist
 
       - name: Node.js hazırla
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
+          package-manager-cache: false
 
-      - name: Java hazırla
-        uses: actions/setup-java@v4
+      - name: Java 17 hazırla
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK hazırla
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools'
+      - name: Android SDK kontrolü
+        run: |
+          set -euo pipefail
 
-      - name: Gradle önbelleğini hazırla
-        uses: gradle/actions/setup-gradle@v4
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            echo "::error::Android SDK bulunamadı."
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          node --version
+          java -version
+          df -h
 
       - name: Bağımlılıkları kur
-        shell: bash
+        env:
+          NODE_ENV: development
         run: |
           set -euo pipefail
-          npm install --include=dev --legacy-peer-deps
+
+          test -f package.json
+
+          # Eski kilit dosyasındaki uyuşmazlıkları Actions ortamında düzeltir.
+          # Değişiklikler GitHub deposuna geri gönderilmez.
+          npm install \
+            --include=dev \
+            --legacy-peer-deps \
+            --no-audit \
+            --no-fund \
+            2>&1 | tee build-logs/npm-install.log
+
+          node -e "
+            require.resolve('expo/package.json');
+            require.resolve('expo-router/package.json');
+          "
+
+      - name: Expo SDK bağımlılıklarını uyumlu hale getir
+        env:
+          NODE_ENV: development
+        run: |
+          set -euo pipefail
+
+          npx --no-install expo install --fix --npm \
+            2>&1 | tee build-logs/expo-dependencies.log
+
+          # Repodaki expo-modules-autolinking: "*" tanımının
+          # farklı bir Expo SDK sürümünü seçmesini önler.
+          AUTOLINK_VERSION="$(node -p \
+            "require('expo/package.json').dependencies['expo-modules-autolinking'] || ''")"
+
+          if [ -z "$AUTOLINK_VERSION" ]; then
+            echo "::error::Expo autolinking sürümü belirlenemedi."
+            exit 1
+          fi
+
+          npm install \
+            --no-save \
+            --package-lock=false \
+            --include=dev \
+            --legacy-peer-deps \
+            --no-audit \
+            --no-fund \
+            "expo-modules-autolinking@$AUTOLINK_VERSION" \
+            2>&1 | tee build-logs/autolinking.log
 
       - name: Expo Android projesini oluştur
-        run: npx expo prebuild --platform android --clean --no-install
-
-      - name: Debug APK derle
-        shell: bash
+        env:
+          NODE_ENV: development
         run: |
           set -euo pipefail
+
+          npx --no-install expo prebuild \
+            --platform android \
+            --clean \
+            --no-install \
+            2>&1 | tee build-logs/prebuild.log
+
+          test -f android/gradlew
           chmod +x android/gradlew
-          cd android
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace \
-            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a \
-            2>&1 | tee ../android-build.log
 
-      - name: APK hazırla
-        shell: bash
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" \
+            > android/local.properties
+
+      - name: Release APK derle
+        env:
+          NODE_ENV: production
         run: |
           set -euo pipefail
-          mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/istizan-offline.apk
-          test -s dist/istizan-offline.apk
-          cd dist
-          sha256sum istizan-offline.apk > istizan-offline.apk.sha256
-          printf '%s\n' \
-            'İstizan — çevrimdışı Android APK' \
-            'istizan-offline.apk dosyasını telefona kurun.' \
-            'İnternet ve Expo Go gerekmez; JavaScript paketi APK içine gömülüdür.' \
-            'Google Play yayını için özel imzalama anahtarı gerekir.' > KURULUM.txt
 
-      - name: APK indirme dosyasını yükle
+          cd android
+
+          ./gradlew :app:assembleRelease \
+            --no-daemon \
+            --console=plain \
+            --stacktrace \
+            --max-workers=2 \
+            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a \
+            2>&1 | tee ../build-logs/gradle.log
+
+      - name: APK dosyasını kontrol et
+        run: |
+          set -euo pipefail
+
+          APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
+
+          if [ ! -s "$APK_PATH" ]; then
+            echo "::error::Release APK oluşturulamadı."
+            find android/app/build/outputs -type f -name "*.apk" || true
+            exit 1
+          fi
+
+          cp "$APK_PATH" dist/istizan-offline.apk
+
+          unzip -l dist/istizan-offline.apk \
+            > build-logs/apk-files.txt
+
+          if ! grep -q "assets/index.android.bundle" build-logs/apk-files.txt; then
+            echo "::error::JavaScript paketi APK içinde bulunamadı."
+            exit 1
+          fi
+
+          (
+            cd dist
+            sha256sum istizan-offline.apk \
+              > istizan-offline.apk.sha256
+          )
+
+          printf '%s\n' \
+            'İstizan Android APK' \
+            '' \
+            'ZIP dosyasını çıkarıp istizan-offline.apk dosyasını telefona kurun.' \
+            'JavaScript paketi APK içine gömülüdür; Expo Go gerekmez.' \
+            'Çevrimdışı kullanım ayrıca cihazda test edilmelidir.' \
+            '' \
+            'Bu APK Expo şablonunun geliştirme anahtarıyla imzalanır.' \
+            'Google Play yayını için özel üretim imzası gerekir.' \
+            'Uygulamayı kaldırmak yerel kayıtları silebilir.' \
+            > dist/KURULUM.txt
+
+      - name: APK dosyasını yükle
         id: artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: istizan-offline-apk
           path: |
@@ -89,22 +206,49 @@ jobs:
             dist/KURULUM.txt
           if-no-files-found: error
           retention-days: 90
+          compression-level: 0
+
+      - name: İndirme bağlantısını göster
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          {
+            echo "## İstizan APK hazır"
+            echo ""
+            printf '[APK ZIP dosyasını indir](%s)\n' "$ARTIFACT_URL"
+            echo ""
+            echo 'ZIP içindeki `istizan-offline.apk` dosyasını telefona kurun.'
+            echo ""
+            echo 'İndirme için GitHub hesabınıza giriş yapmanız gerekir.'
+            echo 'APK geliştirme anahtarıyla imzalanmıştır.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Etiketli sürüme APK ekle
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          name: İstizan ${{ github.ref_name }}
-          generate_release_notes: true
-          files: |
-            dist/istizan-offline.apk
-            dist/istizan-offline.apk.sha256
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
 
-      - name: Derleme hata kaydını yükle
-        if: failure()
-        uses: actions/upload-artifact@v4
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "İstizan $RELEASE_TAG" \
+              --generate-notes
+          fi
+
+          gh release upload "$RELEASE_TAG" \
+            dist/istizan-offline.apk \
+            dist/istizan-offline.apk.sha256 \
+            --clobber
+
+      - name: Derleme günlüklerini yükle
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
-          name: android-build-error-${{ github.run_number }}
-          path: android-build.log
+          name: android-build-logs-${{ github.run_number }}-${{ github.run_attempt }}
+          path: build-logs/
           if-no-files-found: ignore
           retention-days: 14
